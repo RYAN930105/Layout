@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>餐廳即時桌位管理系統 - 雲端同步版</title>
+    <title>祥和園 - 即時桌位管理系統 (雲端同步版)</title>
     <style>
         :root {
             --empty: #2ecc71;      /* 綠色-空桌 */
@@ -53,6 +53,7 @@
         .grid-layout { display: flex; flex-direction: column; gap: 25px; margin-top: 20px; }
         .row { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
 
+        /* 桌子基本樣式 */
         .table {
             display: flex;
             flex-direction: column;
@@ -69,6 +70,7 @@
 
         .table:active { transform: scale(0.92); }
 
+        /* 桌型形狀設計 */
         .small-sq { width: 75px; height: 75px; border-radius: 8px; border: 2px solid #555; }
         .med-circle { width: 90px; height: 90px; border-radius: 50%; border: 2px solid #555; }
         .large-hex { 
@@ -78,6 +80,7 @@
             background-color: #eee;
         }
 
+        /* 狀態顏色 */
         .status-empty { background-color: var(--empty) !important; }
         .status-occupied { background-color: var(--occupied) !important; color: white; }
         .status-reserved { background-color: var(--reserved) !important; }
@@ -87,6 +90,7 @@
         .timer { font-size: 0.85em; margin-top: 4px; display: block; }
         .table-no { font-size: 1.3em; }
 
+        /* 控制按鈕 */
         .controls { display: flex; gap: 12px; }
         button {
             padding: 12px 24px;
@@ -114,6 +118,7 @@
             color: #7f8c8d;
         }
 
+        /* 彈窗設計 */
         #modal {
             display: none;
             position: fixed;
@@ -241,73 +246,100 @@
     <button style="margin-top:20px; width:100%; background:#eee;" onclick="closeMenu()">取消返回</button>
 </div>
 
-<!-- 主要邏輯腳本 -->
+<!-- Firebase 核心與邏輯整合 -->
 <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, update } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-database.js";
 
-    // Firebase 配置
     const firebaseConfig = {
-        apiKey: "AIzaSyDcV9UV1RA442wxWqQ0NXeGq_i7QeKl4IA",
-        authDomain: "myrestaurantsystem-e26fa.firebaseapp.com",
-        projectId: "myrestaurantsystem-e26fa",
-        storageBucket: "myrestaurantsystem-e26fa.firebasestorage.app",
-        messagingSenderId: "224979874680",
-        appId: "1:224979874680:web:a78bfd0d791634cf6ace8d",
-        measurementId: "G-7LZKM3F0HD"
+        apiKey: "AIzaSyAa8iKRT0hPqCz4FNhlVidcEmIfNwEjRzs",
+        authDomain: "layout-b9139.firebaseapp.com",
+        projectId: "layout-b9139",
+        databaseURL: "https://layout-b9139-default-rtdb.firebaseio.com",
+        storageBucket: "layout-b9139.firebasestorage.app",
+        messagingSenderId: "184527237878",
+        appId: "1:184527237878:web:991d50b6594657e42932d7"
     };
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
-    
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbymR8Y41qqTbLIE0xe7OQaqd9OzCIWp6shkJkpr51yFG24tr7KznPvDaV47CXD6AtBVg/exec";
+
     let currentTable = null;
     const tableData = {}; 
-    const logData = []; 
+    const logData = [];    
 
-    // 初始化與 Firebase 同步
+    // 初始化桌位 DOM 與數據結構
     function init() {
         const allTables = document.querySelectorAll('.table');
         document.getElementById('total-tables').innerText = allTables.length;
 
         allTables.forEach(t => {
             const id = t.id.replace('t', '');
-            tableData[id] = { status: 'empty', startTime: null, timerInterval: null };
+            tableData[id] = {
+                status: 'empty',
+                startTime: null,
+                timerInterval: null
+            };
             t.innerHTML = `<span class="table-no">${id}</span><span class="timer" id="timer-${id}"></span>`;
         });
 
-        const dbRef = ref(db, 'tables/');
-        onValue(dbRef, (snapshot) => {
-            const data = snapshot.val();
+        // 監聽 Firebase 數據同步
+        onValue(ref(db, 'tables'), (snapshot) => {
+            const cloudData = snapshot.val() || {};
             Object.keys(tableData).forEach(id => {
-                const serverInfo = (data && data[id]) ? data[id] : { status: 'empty', startTime: null };
-                renderTable(id, serverInfo.status, serverInfo.startTime);
+                const cloudTable = cloudData[id] || { status: 'empty', startTime: null };
+                syncTableState(id, cloudTable);
             });
             updateCounts();
         });
     }
 
-    // 渲染桌位與計時
-    function renderTable(id, status, startTimeStr) {
-        const d = tableData[id];
+    // 同步雲端狀態到畫面
+    function syncTableState(id, cloudTable) {
         const el = document.getElementById(`t${id}`);
-        const startTime = startTimeStr ? new Date(startTimeStr) : null;
-
-        d.status = status;
-        d.startTime = startTime;
-
-        const shape = el.classList.contains('small-sq') ? 'small-sq' : 
-                      el.classList.contains('med-circle') ? 'med-circle' : 'large-hex';
-        el.className = `table ${shape} status-${status}`;
-
-        if ((status === 'occupied' || status === 'rush') && startTime) {
-            startTimer(id);
+        const data = tableData[id];
+        
+        // 更新狀態 Class
+        const shapeClass = el.classList.contains('small-sq') ? 'small-sq' : 
+                           el.classList.contains('med-circle') ? 'med-circle' : 'large-hex';
+        el.className = `table ${shapeClass} status-${cloudTable.status}`;
+        
+        data.status = cloudTable.status;
+        
+        // 處理計時器
+        if (cloudTable.startTime) {
+            data.startTime = new Date(cloudTable.startTime);
+            if (!data.timerInterval) startTimer(id);
         } else {
+            data.startTime = null;
             stopTimer(id);
             document.getElementById(`timer-${id}`).innerText = '';
         }
     }
 
-    // 將核心功能掛載至 window 物件，解決 type="module" 的呼叫問題
+    // 啟動計時器
+    function startTimer(id) {
+        if (tableData[id].timerInterval) clearInterval(tableData[id].timerInterval);
+        tableData[id].timerInterval = setInterval(() => {
+            if (!tableData[id].startTime) return;
+            const now = new Date();
+            const diff = Math.floor((now - tableData[id].startTime) / 1000);
+            const mins = Math.floor(diff / 60);
+            const secs = diff % 60;
+            const timerEl = document.getElementById(`timer-${id}`);
+            if (timerEl) {
+                timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            }
+        }, 1000);
+    }
+
+    function stopTimer(id) {
+        clearInterval(tableData[id].timerInterval);
+        tableData[id].timerInterval = null;
+    }
+
+    // 全局函式掛載至 window
     window.openMenu = (id) => {
         currentTable = id;
         document.getElementById('modal-title').innerText = `管理桌號：${id}`;
@@ -322,97 +354,100 @@
 
     window.updateStatus = (status) => {
         const data = tableData[currentTable];
-        let startTime = data.startTime;
+        let startTime = data.startTime ? data.startTime.toISOString() : null;
 
         if ((status === 'occupied' || status === 'rush') && !startTime) {
-            startTime = new Date();
+            startTime = new Date().toISOString();
             logAction(currentTable, "入座");
         } else if (status === 'empty') {
             if(startTime) logAction(currentTable, "結帳離開");
             startTime = null;
         }
 
-        set(ref(db, 'tables/' + currentTable), {
+        // 推送到 Firebase
+        set(ref(db, `tables/${currentTable}`), {
             status: status,
-            startTime: startTime ? startTime.toISOString() : null
+            startTime: startTime
         });
-        closeMenu();
-    };
 
-    function startTimer(id) {
-        if (tableData[id].timerInterval) clearInterval(tableData[id].timerInterval);
-        tableData[id].timerInterval = setInterval(() => {
-            if (!tableData[id].startTime) return;
-            const diff = Math.floor((new Date() - tableData[id].startTime) / 1000);
-            const mins = Math.floor(diff / 60);
-            const secs = diff % 60;
-            const timerEl = document.getElementById(`timer-${id}`);
-            if (timerEl) timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        }, 1000);
-    }
-
-    function stopTimer(id) {
-        clearInterval(tableData[id].timerInterval);
-        tableData[id].timerInterval = null;
-    }
-
-    window.safeReload = () => {
-        if (confirm("【警告】這將清空雲端所有即時數據！確定重設嗎？")) {
-            remove(ref(db, 'tables/')).then(() => location.reload());
-        }
+        window.closeMenu();
     };
 
     window.transferTable = () => {
-        const target = prompt("請輸入換到的桌號:");
+        const target = prompt("請輸入要換到的桌號 (例如: 10):");
         if (target && tableData[target]) {
-            if (tableData[target].status !== 'empty') return alert("目標桌已有客人！");
-            const old = currentTable;
-            const savedTime = tableData[old].startTime;
-            const savedStatus = tableData[old].status;
+            if (tableData[target].status !== 'empty') {
+                alert("目標桌位已有客人！");
+                return;
+            }
+            const oldTable = currentTable;
+            const savedTime = tableData[oldTable].startTime ? tableData[oldTable].startTime.toISOString() : null;
+            const savedStatus = tableData[oldTable].status;
 
-            set(ref(db, 'tables/' + old), { status: 'empty', startTime: null });
-            set(ref(db, 'tables/' + target), {
-                status: savedStatus,
-                startTime: savedTime ? savedTime.toISOString() : null
-            });
+            // 批次更新 Firebase
+            const updates = {};
+            updates[`tables/${oldTable}`] = { status: 'empty', startTime: null };
+            updates[`tables/${target}`] = { status: savedStatus, startTime: savedTime };
+            update(ref(db), updates);
 
-            logAction(target, `從 ${old} 換桌過來`);
-            alert("換桌成功");
-            closeMenu();
-        } else if (target) alert("找不到該桌號");
+            logAction(target, `從 ${oldTable} 換桌過來`);
+            alert(`換桌成功：${oldTable} -> ${target}`);
+            window.closeMenu();
+        } else if (target) {
+            alert("找不到該桌號！");
+        }
+    };
+
+    window.safeReload = () => {
+        if (confirm("【警告】這將會清空雲端資料庫中所有桌位狀態！確定要重設嗎？")) {
+            set(ref(db, 'tables'), null);
+            location.reload();
+        }
+    };
+
+    window.exportToCSV = () => {
+        if (logData.length === 0) {
+            alert("目前沒有任何紀錄可供匯出。");
+            return;
+        }
+        let csvContent = "\ufeff桌號,動作,時間\n";
+        logData.forEach(row => {
+            csvContent += `${row.桌號},${row.動作},${row.時間}\n`;
+        });
+        
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `祥和園紀錄_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`;
+        link.click();
     };
 
     function logAction(id, type) {
-        const logEntry = { tableNo: id, action: type, time: new Date().toLocaleString() };
-        logData.push(logEntry);
+        const now = new Date();
+        const actionLog = {
+            桌號: id,
+            動作: type,
+            時間: now.toLocaleString('zh-TW', { hour12: false })
+        };
+        logData.push(actionLog);
 
-        // Google Sheets 同步（需確保 GAS 應用程式權限已設為「任何人」）
-        const gasUrl = "https://script.google.com/macros/s/AKfycbxwoyudKr1DGsZScRYAUDZBuYYvAlTdmd6Q4Qsoj_j7DJX3V5AfOZ0EPNNCF9GeX5mY1g/exec";
-        fetch(gasUrl, {
+        // 同步發送至 Google Sheets (圖片 1 內容)
+        fetch(SCRIPT_URL, {
             method: "POST",
-            body: JSON.stringify(logEntry),
-            mode: 'no-cors'
-        }).catch(err => console.error("Excel 同步失敗:", err));
+            mode: "no-cors",
+            body: JSON.stringify(actionLog)
+        });
     }
-
-    window.exportToCSV = () => {
-        if (logData.length === 0) return alert("沒有紀錄可供匯出");
-        let csv = "\ufeff桌號,動作,時間\n";
-        logData.forEach(r => csv += `${r.tableNo},${r.action},${r.time}\n`);
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `翻桌紀錄_${new Date().toLocaleDateString()}.csv`;
-        link.click();
-    };
 
     function updateCounts() {
         const counts = { empty1F: 0, emptyB1: 0, occupied: 0 };
         Object.keys(tableData).forEach(id => {
             const d = tableData[id];
+            const tableId = parseInt(id);
             if (d.status === 'occupied' || d.status === 'rush') counts.occupied++;
             if (d.status === 'empty') {
-                if (parseInt(id) <= 26) counts.empty1F++;
+                if (tableId <= 26) counts.empty1F++;
                 else counts.emptyB1++;
             }
         });
@@ -421,8 +456,7 @@
         document.getElementById('empty-b1').innerText = counts.emptyB1;
     }
 
-    window.onload = init;
+    init();
 </script>
-
 </body>
 </html>
