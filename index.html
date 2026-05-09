@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>餐廳即時桌位管理系統 - 雲端同步版</title>
+    <style>
+        :root {
+            --empty: #2ecc71;      /* 綠色-空桌 */
+            --occupied: #e74c3c;   /* 紅色-用餐中 */
+            --reserved: #f1c40f;   /* 黃色-已預訂 */
+            --cleaning: #95a5a6;   /* 灰色-待清潔 */
+            --rush: #9b59b6;       /* 紫色-吹菜 */
+            --bg-color: #f4f7f6;
+        }
+
+        body {
+            font-family: "Microsoft JhengHei", sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            user-select: none;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .counter-box { font-size: 1.1em; font-weight: bold; color: #2c3e50; line-height: 1.6; }
+        .counter-box span { color: #e67e22; margin: 0 5px; }
+
+        .floor-container {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            min-width: 950px;
+        }
+
+        h2 { border-left: 8px solid #34495e; padding-left: 15px; margin-top: 0; color: #34495e; }
+
+        .grid-layout { display: flex; flex-direction: column; gap: 25px; margin-top: 20px; }
+        .row { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+
+        .table {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: transform 0.1s, filter 0.2s;
+            position: relative;
+            color: black;
+            font-weight: bold;
+            text-align: center;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .table:active { transform: scale(0.92); }
+
+        .small-sq { width: 75px; height: 75px; border-radius: 8px; border: 2px solid #555; }
+        .med-circle { width: 90px; height: 90px; border-radius: 50%; border: 2px solid #555; }
+        .large-hex { 
+            width: 105px; height: 105px; 
+            clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+            border: 2px solid #555;
+            background-color: #eee;
+        }
+
+        .status-empty { background-color: var(--empty) !important; }
+        .status-occupied { background-color: var(--occupied) !important; color: white; }
+        .status-reserved { background-color: var(--reserved) !important; }
+        .status-cleaning { background-color: var(--cleaning) !important; }
+        .status-rush { background-color: var(--rush) !important; color: white; }
+
+        .timer { font-size: 0.85em; margin-top: 4px; display: block; }
+        .table-no { font-size: 1.3em; }
+
+        .controls { display: flex; gap: 12px; }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        .btn-export { background: #34495e; color: white; }
+        .btn-reload { background: #c0392b; color: white; }
+
+        .counter {
+            width: 160px; height: 80px;
+            background: #ecf0f1;
+            border: 3px dashed #bdc3c7;
+            border-radius: 12px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-right: 40px;
+            font-size: 1.2em;
+            color: #7f8c8d;
+        }
+
+        #modal {
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 35px;
+            border-radius: 20px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.6);
+            z-index: 100;
+            text-align: center;
+            width: 320px;
+        }
+        .overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 99;
+            backdrop-filter: blur(3px);
+        }
+        .modal-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="counter-box">
+        1F 空桌: <span id="empty-1f">0</span> | 
+        B1 空桌: <span id="empty-b1">0</span> | 
+        用餐中: <span id="occupy-count">0</span> | 
+        總桌數: <span id="total-tables">0</span>
+    </div>
+    <div class="controls">
+        <button class="btn-export" onclick="exportToCSV()">匯出後台紀錄 (Excel)</button>
+        <button class="btn-reload" onclick="safeReload()">重設系統</button>
+    </div>
+</header>
+
+<div class="floor-container">
+    <h2>1F 樓上區域</h2>
+    <div class="grid-layout">
+        <div class="row">
+            <div id="t26" class="table med-circle" onclick="openMenu(26)">26</div>
+            <div id="t8" class="table small-sq" onclick="openMenu(8)">8</div>
+            <div id="t7" class="table small-sq" onclick="openMenu(7)">7</div>
+            <div id="t6" class="table small-sq" onclick="openMenu(6)">6</div>
+            <div id="t5" class="table small-sq" onclick="openMenu(5)">5</div>
+            <div id="t4" class="table small-sq" onclick="openMenu(4)">4</div>
+            <div id="t3" class="table small-sq" onclick="openMenu(3)">3</div>
+            <div id="t2" class="table small-sq" onclick="openMenu(2)">2</div>
+        </div>
+        <div class="row">
+            <div style="width:75px"></div>
+            <div id="t15" class="table med-circle" onclick="openMenu(15)">15</div>
+            <div id="t14" class="table med-circle" onclick="openMenu(14)">14</div>
+            <div id="t13" class="table large-hex" onclick="openMenu(13)">13</div>
+            <div id="t12" class="table med-circle" onclick="openMenu(12)">12</div>
+            <div id="t11" class="table med-circle" onclick="openMenu(11)">11</div>
+            <div id="t10" class="table large-hex" onclick="openMenu(10)">10</div>
+            <div id="t9" class="table med-circle" onclick="openMenu(9)">9</div>
+        </div>
+        <div class="row">
+            <div id="t21" class="table large-hex" onclick="openMenu(21)">21</div>
+            <div id="t20" class="table large-hex" onclick="openMenu(20)">20</div>
+            <div id="t19" class="table large-hex" onclick="openMenu(19)">19</div>
+            <div id="t18" class="table large-hex" onclick="openMenu(18)">18</div>
+            <div id="t17" class="table large-hex" onclick="openMenu(17)">17</div>
+            <div id="t16" class="table large-hex" onclick="openMenu(16)">16</div>
+        </div>
+        <div class="row">
+            <div class="counter">櫃檯</div>
+            <div style="width:100px"></div>
+            <div id="t25" class="table med-circle" onclick="openMenu(25)">25</div>
+            <div id="t24" class="table med-circle" onclick="openMenu(24)">24</div>
+            <div id="t23" class="table large-hex" onclick="openMenu(23)">23</div>
+            <div id="t22" class="table large-hex" onclick="openMenu(22)">22</div>
+        </div>
+    </div>
+</div>
+
+<div class="floor-container">
+    <h2>B1 區域</h2>
+    <div class="grid-layout">
+        <div class="row">
+            <div id="t33" class="table med-circle" onclick="openMenu(33)">33</div>
+            <div id="t32" class="table large-hex" onclick="openMenu(32)">32</div>
+            <div id="t31" class="table large-hex" onclick="openMenu(31)">31</div>
+            <div id="t30" class="table large-hex" onclick="openMenu(30)">30</div>
+            <div id="t29" class="table large-hex" onclick="openMenu(29)">29</div>
+            <div id="t28" class="table large-hex" onclick="openMenu(28)">28</div>
+            <div id="t27" class="table large-hex" onclick="openMenu(27)">27</div>
+        </div>
+        <div class="row">
+            <div style="width:160px"></div>
+            <div id="t39" class="table med-circle" onclick="openMenu(39)">39</div>
+            <div id="t38" class="table large-hex" onclick="openMenu(38)">38</div>
+            <div id="t37" class="table large-hex" onclick="openMenu(37)">37</div>
+            <div id="t36" class="table large-hex" onclick="openMenu(36)">36</div>
+            <div id="t35" class="table large-hex" onclick="openMenu(35)">35</div>
+        </div>
+        <div class="row">
+            <div id="t46" class="table med-circle" onclick="openMenu(46)">46</div>
+            <div id="t45" class="table med-circle" onclick="openMenu(45)">45</div>
+            <div id="t44" class="table med-circle" onclick="openMenu(44)">44</div>
+            <div id="t43" class="table med-circle" onclick="openMenu(43)">43</div>
+            <div id="t42" class="table med-circle" onclick="openMenu(42)">42</div>
+            <div id="t41" class="table med-circle" onclick="openMenu(41)">41</div>
+            <div id="t40" class="table med-circle" onclick="openMenu(40)">40</div>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeMenu()"></div>
+<div id="modal">
+    <h3 id="modal-title">桌號</h3>
+    <div class="modal-btns">
+        <button style="background:var(--occupied); color:white;" onclick="updateStatus('occupied')">用餐入座</button>
+        <button style="background:var(--rush); color:white;" onclick="updateStatus('rush')">吹菜(趕菜)</button>
+        <button style="background:var(--reserved);" onclick="updateStatus('reserved')">預約保留</button>
+        <button style="background:var(--cleaning);" onclick="updateStatus('cleaning')">清潔中</button>
+        <button style="background:var(--empty);" onclick="updateStatus('empty')">結帳/清空</button>
+        <button style="background:#3498db; color:white;" onclick="transferTable()">更換桌位</button>
+    </div>
+    <button style="margin-top:20px; width:100%; background:#eee;" onclick="closeMenu()">取消返回</button>
+</div>
+
+<!-- 主要邏輯腳本 -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+    // Firebase 配置
+    const firebaseConfig = {
+        apiKey: "AIzaSyDcV9UV1RA442wxWqQ0NXeGq_i7QeKl4IA",
+        authDomain: "myrestaurantsystem-e26fa.firebaseapp.com",
+        projectId: "myrestaurantsystem-e26fa",
+        storageBucket: "myrestaurantsystem-e26fa.firebasestorage.app",
+        messagingSenderId: "224979874680",
+        appId: "1:224979874680:web:a78bfd0d791634cf6ace8d",
+        measurementId: "G-7LZKM3F0HD"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    
+    let currentTable = null;
+    const tableData = {}; 
+    const logData = []; 
+
+    // 初始化與 Firebase 同步
+    function init() {
+        const allTables = document.querySelectorAll('.table');
+        document.getElementById('total-tables').innerText = allTables.length;
+
+        allTables.forEach(t => {
+            const id = t.id.replace('t', '');
+            tableData[id] = { status: 'empty', startTime: null, timerInterval: null };
+            t.innerHTML = `<span class="table-no">${id}</span><span class="timer" id="timer-${id}"></span>`;
+        });
+
+        const dbRef = ref(db, 'tables/');
+        onValue(dbRef, (snapshot) => {
+            const data = snapshot.val();
+            Object.keys(tableData).forEach(id => {
+                const serverInfo = (data && data[id]) ? data[id] : { status: 'empty', startTime: null };
+                renderTable(id, serverInfo.status, serverInfo.startTime);
+            });
+            updateCounts();
+        });
+    }
+
+    // 渲染桌位與計時
+    function renderTable(id, status, startTimeStr) {
+        const d = tableData[id];
+        const el = document.getElementById(`t${id}`);
+        const startTime = startTimeStr ? new Date(startTimeStr) : null;
+
+        d.status = status;
+        d.startTime = startTime;
+
+        const shape = el.classList.contains('small-sq') ? 'small-sq' : 
+                      el.classList.contains('med-circle') ? 'med-circle' : 'large-hex';
+        el.className = `table ${shape} status-${status}`;
+
+        if ((status === 'occupied' || status === 'rush') && startTime) {
+            startTimer(id);
+        } else {
+            stopTimer(id);
+            document.getElementById(`timer-${id}`).innerText = '';
+        }
+    }
+
+    // 將核心功能掛載至 window 物件，解決 type="module" 的呼叫問題
+    window.openMenu = (id) => {
+        currentTable = id;
+        document.getElementById('modal-title').innerText = `管理桌號：${id}`;
+        document.getElementById('modal').style.display = 'block';
+        document.getElementById('overlay').style.display = 'block';
+    };
+
+    window.closeMenu = () => {
+        document.getElementById('modal').style.display = 'none';
+        document.getElementById('overlay').style.display = 'none';
+    };
+
+    window.updateStatus = (status) => {
+        const data = tableData[currentTable];
+        let startTime = data.startTime;
+
+        if ((status === 'occupied' || status === 'rush') && !startTime) {
+            startTime = new Date();
+            logAction(currentTable, "入座");
+        } else if (status === 'empty') {
+            if(startTime) logAction(currentTable, "結帳離開");
+            startTime = null;
+        }
+
+        set(ref(db, 'tables/' + currentTable), {
+            status: status,
+            startTime: startTime ? startTime.toISOString() : null
+        });
+        closeMenu();
+    };
+
+    function startTimer(id) {
+        if (tableData[id].timerInterval) clearInterval(tableData[id].timerInterval);
+        tableData[id].timerInterval = setInterval(() => {
+            if (!tableData[id].startTime) return;
+            const diff = Math.floor((new Date() - tableData[id].startTime) / 1000);
+            const mins = Math.floor(diff / 60);
+            const secs = diff % 60;
+            const timerEl = document.getElementById(`timer-${id}`);
+            if (timerEl) timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }, 1000);
+    }
+
+    function stopTimer(id) {
+        clearInterval(tableData[id].timerInterval);
+        tableData[id].timerInterval = null;
+    }
+
+    window.safeReload = () => {
+        if (confirm("【警告】這將清空雲端所有即時數據！確定重設嗎？")) {
+            remove(ref(db, 'tables/')).then(() => location.reload());
+        }
+    };
+
+    window.transferTable = () => {
+        const target = prompt("請輸入換到的桌號:");
+        if (target && tableData[target]) {
+            if (tableData[target].status !== 'empty') return alert("目標桌已有客人！");
+            const old = currentTable;
+            const savedTime = tableData[old].startTime;
+            const savedStatus = tableData[old].status;
+
+            set(ref(db, 'tables/' + old), { status: 'empty', startTime: null });
+            set(ref(db, 'tables/' + target), {
+                status: savedStatus,
+                startTime: savedTime ? savedTime.toISOString() : null
+            });
+
+            logAction(target, `從 ${old} 換桌過來`);
+            alert("換桌成功");
+            closeMenu();
+        } else if (target) alert("找不到該桌號");
+    };
+
+    function logAction(id, type) {
+        const logEntry = { tableNo: id, action: type, time: new Date().toLocaleString() };
+        logData.push(logEntry);
+
+        // Google Sheets 同步（需確保 GAS 應用程式權限已設為「任何人」）
+        const gasUrl = "https://script.google.com/macros/s/AKfycbxwoyudKr1DGsZScRYAUDZBuYYvAlTdmd6Q4Qsoj_j7DJX3V5AfOZ0EPNNCF9GeX5mY1g/exec";
+        fetch(gasUrl, {
+            method: "POST",
+            body: JSON.stringify(logEntry),
+            mode: 'no-cors'
+        }).catch(err => console.error("Excel 同步失敗:", err));
+    }
+
+    window.exportToCSV = () => {
+        if (logData.length === 0) return alert("沒有紀錄可供匯出");
+        let csv = "\ufeff桌號,動作,時間\n";
+        logData.forEach(r => csv += `${r.tableNo},${r.action},${r.time}\n`);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `翻桌紀錄_${new Date().toLocaleDateString()}.csv`;
+        link.click();
+    };
+
+    function updateCounts() {
+        const counts = { empty1F: 0, emptyB1: 0, occupied: 0 };
+        Object.keys(tableData).forEach(id => {
+            const d = tableData[id];
+            if (d.status === 'occupied' || d.status === 'rush') counts.occupied++;
+            if (d.status === 'empty') {
+                if (parseInt(id) <= 26) counts.empty1F++;
+                else counts.emptyB1++;
+            }
+        });
+        document.getElementById('occupy-count').innerText = counts.occupied;
+        document.getElementById('empty-1f').innerText = counts.empty1F;
+        document.getElementById('empty-b1').innerText = counts.emptyB1;
+    }
+
+    window.onload = init;
+</script>
+
+</body>
+</html>
